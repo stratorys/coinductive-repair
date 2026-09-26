@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def main():
-    source = Path("target/contracts/account.json")
+    source = Path("contracts/account.json")
     trace = json.loads(source.read_text())
     invalid = []
 

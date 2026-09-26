@@ -1,0 +1,12 @@
+{
+  "functions": {
+    "add": {
+      "inputs": [
+        "u32",
+        "u32"
+      ],
+      "output": "u32",
+      "visibility": "public"
+    }
+  }
+}

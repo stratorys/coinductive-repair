@@ -2,6 +2,37 @@
 
 Exemple exécutable de validation d'une API Rust et de son comportement observé.
 
+## Fonctionnement de bout en bout
+
+Les fichiers `.cue` sont les spécifications : ils décrivent ce que le code doit
+faire. Les fichiers `.json` sont des observations : ils décrivent ce que le code
+expose ou ce qu'il a réellement produit. `cue vet` compare les deux.
+
+`scripts/check.sh` exécute ces étapes dans l'ordre :
+
+1. Rustdoc analyse la bibliothèque et écrit `target/doc/coinductive_repair.json`.
+   Ce JSON décrit l'API ; il ne contient pas les corps des fonctions.
+2. `uv run` exécute l'adaptateur qui extrait la signature de `add` dans
+   `contracts/api.json`. CUE la compare à `specs/api.cue`.
+3. `cargo run` appelle réellement `add` avec 260 couples d'entrées et écrit les
+   résultats dans `contracts/observations.json`. CUE les compare aux équations
+   de `specs/behavior.cue`.
+4. `cargo run --example account` exécute onze opérations bancaires successives
+   et écrit `contracts/account.json`. CUE compare les soldes et statuts à
+   `specs/account.cue`, puis vérifie que les transitions s'enchaînent.
+5. `uv run` exécute le test qui corrompt sept copies temporaires de cette trace.
+   Chaque copie doit être refusée par CUE. Les copies sont ensuite supprimées.
+
+Un rejet d'opération bancaire est un résultat attendu, par exemple lorsqu'un
+retrait manque de fonds. Un rejet par CUE signifie que le JSON contredit la
+spécification. Les lignes « Rejet confirmé » indiquent que les erreurs injectées
+ont bien été détectées, pas que la trace originale contient des erreurs.
+
+Les trois JSON de `contracts/` sont versionnés pour pouvoir lire et comparer les
+observations dans Git. Le script les régénère à chaque exécution. Les modifier
+manuellement ne corrige pas Rust : il faut modifier le code et relancer le script.
+Le JSON rustdoc brut reste dans `target/`, qui est ignoré par Git.
+
 ## Exécution
 
 Prérequis : Rust stable, Rust nightly, uv et CUE (module en version 0.17.1).
@@ -12,7 +43,7 @@ rustup toolchain install nightly
 bash scripts/check.sh
 ```
 
-Le script produit deux artefacts dans `target/contracts/` :
+Le script régénère trois artefacts versionnés dans `contracts/` :
 
 - `api.json` : fonctions publiques de premier niveau extraites de rustdoc ;
 - `observations.json` : entrées et résultats réels de la fonction Rust `add`.
@@ -57,8 +88,8 @@ L'implémentation est dans `src/account.rs`, le scénario dans `examples/account
 et le contrat indépendant dans `specs/account.cue`.
 
 ```sh
-cargo run --quiet --example account > target/contracts/account.json
-cue vet -c specs/account.cue target/contracts/account.json
+cargo run --quiet --example account > contracts/account.json
+cue vet -c specs/account.cue contracts/account.json
 uv run --no-project scripts/check_account.py
 ```
 
