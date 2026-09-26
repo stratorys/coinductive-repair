@@ -16,6 +16,7 @@ Le script produit deux artefacts dans `target/contracts/` :
 
 - `api.json` : fonctions publiques de premier niveau extraites de rustdoc ;
 - `observations.json` : entrées et résultats réels de la fonction Rust `add`.
+- `account.json` : trace de onze opérations sur un compte bancaire.
 
 Les contrats indépendants sont dans `specs/api.cue` et `specs/behavior.cue`.
 Une commande échoue dès qu'une extraction, une exécution ou une validation échoue.
@@ -49,3 +50,39 @@ CUE valide les observations fournies. Cela ne prouve pas la correction pour
 toutes les entrées. Étendre le générateur avec des cas métier, des entrées
 aléatoires ou des traces de transitions pour vérifier davantage de propriétés.
 Les specs doivent exprimer l'intention indépendamment de l'implémentation.
+
+## Exemple avec état : compte bancaire
+
+L'implémentation est dans `src/account.rs`, le scénario dans `examples/account.rs`
+et le contrat indépendant dans `specs/account.cue`.
+
+```sh
+cargo run --quiet --example account > target/contracts/account.json
+cue vet -c specs/account.cue target/contracts/account.json
+uv run --no-project scripts/check_account.py
+```
+
+Le compte démarre à 100 unités. Chaque dépôt augmente le solde ; chaque retrait
+accepté prélève le montant plus deux unités de frais. Un montant nul, un dépôt
+dépassant u32::MAX ou un retrait sans fonds suffisants est refusé sans modifier
+le solde. La trace couvre tous ces cas, dont un retrait de u32::MAX : le calcul
+des frais lui-même ne doit pas déborder.
+
+CUE vérifie chaque transition, son statut, la continuité entre transitions et
+l'égalité du solde final avec la dernière observation. Par exemple :
+
+| Opération | Avant | Montant | Après | Statut |
+| --- | ---: | ---: | ---: | --- |
+| Dépôt | 100 | 50 | 150 | ok |
+| Retrait | 150 | 40 | 108 | ok |
+| Retrait | 108 | 200 | 108 | insufficient_funds |
+| Dépôt | 108 | 0 | 108 | zero_amount |
+| Dépôt | 108 | 4294967295 | 108 | overflow |
+
+`scripts/check_account.py`, exécuté via uv, injecte sept erreurs dans des copies
+de la trace et vérifie leur rejet. Une transition valide isolément mais qui ne
+part pas du solde précédent est également rejetée.
+
+L'extraction rustdoc actuelle reste limitée à l'API `add` de premier niveau :
+les types et méthodes du module bancaire ne sont pas normalisés. Cet exemple
+étend la vérification du comportement, sans étendre le contrat structurel d'API.
