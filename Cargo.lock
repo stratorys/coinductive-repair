@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "coinductive_repair"
+name = "coinductive-repair"
 version = "0.1.0"

@@ -1,6 +1,11 @@
 [package]
-name = "coinductive_repair"
+name = "coinductive-repair"
 version = "0.1.0"
 edition = "2024"
+description = "Check Rust APIs and observed behaviour against independent CUE specifications, using JSON as the bridge."
+license = "MPL-2.0"
+repository = "https://github.com/stratorys/coinductive-repair"
+readme = "README.md"
+publish = false
 
 [dependencies]
