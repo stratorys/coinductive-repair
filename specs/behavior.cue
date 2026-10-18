@@ -1,15 +1,16 @@
 package spec
 
-#U32: int & >=0 & <=4294967295
+#U32Max: 4294967295
+#U32:    int & >=0 & <=#U32Max
 
 #Run: {
 	input!: {
 		a!: #U32
 		b!: #U32
 	}
-	// Contrat limité aux entrées dont la somme tient dans un u32.
+	// Only covers inputs whose sum fits in a u32.
 	output!: #U32 & (input.a + input.b)
 }
 
-// Exige au moins une observation.
+// At least one observation is required, so an empty file cannot pass.
 runs!: [#Run, ...#Run]
