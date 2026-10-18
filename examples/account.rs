@@ -26,7 +26,7 @@ fn main() {
         let outcome = account.apply(operation, amount);
         let after = account.balance();
         let separator = if i == 0 { "" } else { "," };
-        // Les chaînes proviennent exclusivement des enums fermées ci-dessus.
+        // Strings only come from the closed enums above: nothing to escape.
         println!(
             "{separator}{{\"operation\":\"{}\",\"amount\":{amount},\"before\":{before},\"after\":\
              {after},\"status\":\"{}\"}}",

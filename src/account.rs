@@ -1,5 +1,9 @@
-//! Compte avec frais fixes de retrait et opérations atomiques.
+//! Account with a fixed withdrawal fee and all-or-nothing operations.
 
+/// Fee charged on every accepted withdrawal, on top of the amount.
+pub const WITHDRAWAL_FEE: u32 = 2;
+
+/// Kind of operation applied to an [`Account`].
 #[derive(Clone, Copy, Debug)]
 pub enum Operation {
     Deposit,
@@ -15,6 +19,7 @@ impl Operation {
     }
 }
 
+/// Result of [`Account::apply`]. Only [`Outcome::Ok`] changes the balance.
 #[derive(Clone, Copy, Debug)]
 pub enum Outcome {
     Ok,
@@ -34,6 +39,7 @@ impl Outcome {
     }
 }
 
+/// Account holding a balance that never goes below zero or above `u32::MAX`.
 pub struct Account {
     balance: u32,
 }
@@ -47,8 +53,10 @@ impl Account {
 
     pub fn balance(&self) -> u32 { self.balance }
 
-    /// Un retrait accepté coûte deux unités supplémentaires.
-    /// Une opération refusée conserve le solde, sans frais.
+    /// Applies an operation and reports its outcome.
+    ///
+    /// An accepted withdrawal costs [`WITHDRAWAL_FEE`] extra units.
+    /// A rejected operation leaves the balance unchanged and charges no fee.
     pub fn apply(
         &mut self,
         operation: Operation,
@@ -63,8 +71,8 @@ impl Account {
                 None => return Outcome::Overflow,
             },
             Operation::Withdraw => {
-                // u64 évite un dépassement lors du calcul montant + frais.
-                let total = u64::from(amount) + 2;
+                // u64 keeps amount + fee from overflowing.
+                let total = u64::from(amount) + u64::from(WITHDRAWAL_FEE);
                 if total > u64::from(self.balance) {
                     return Outcome::InsufficientFunds;
                 }

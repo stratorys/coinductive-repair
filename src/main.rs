@@ -16,7 +16,7 @@ fn main() {
     for (i, (a, b)) in cases.into_iter().enumerate() {
         let output = coinductive_repair::add(a, b);
         let separator = if i == 0 { "" } else { "," };
-        // Tous les champs sont numériques : aucune chaîne à échapper.
+        // Every field is numeric, so there is no string to escape.
         println!("{separator}{{\"input\":{{\"a\":{a},\"b\":{b}}},\"output\":{output}}}");
     }
     println!("]}}");
