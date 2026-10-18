@@ -1,5 +1,9 @@
 #!/usr/bin/env -S uv run --script
-"""Vérifie que CUE rejette plusieurs traces bancaires corrompues."""
+"""Check that CUE rejects several corrupted copies of the bank account trace.
+
+Each mutation breaks exactly one rule of specs/account.cue. If CUE accepts any
+of them, the spec is too weak and this script fails.
+"""
 
 import copy
 import json
@@ -18,18 +22,26 @@ def main():
         change(candidate)
         invalid.append((name, candidate))
 
-    mutation("frais oubliés", lambda t: t["steps"][1].update(after=110))
-    mutation("débit après refus", lambda t: t["steps"][2].update(after=106))
-    mutation("mauvais statut", lambda t: t["steps"][4].update(status="ok"))
-    mutation("solde final incorrect", lambda t: t.update(final=0))
-    mutation("montant nul accepté", lambda t: t["steps"][3].update(status="ok"))
-    mutation("trace vide", lambda t: t.update(steps=[]))
+    # Step 1 is an accepted withdrawal of 40 from 150: the fee must be charged.
+    mutation("withdrawal fee not charged", lambda t: t["steps"][1].update(after=110))
+    # Step 2 is rejected for insufficient funds: the balance must not change.
+    mutation(
+        "balance debited after a rejection", lambda t: t["steps"][2].update(after=106)
+    )
+    # Step 4 deposits u32::MAX: it must be reported as an overflow.
+    mutation("overflow reported as ok", lambda t: t["steps"][4].update(status="ok"))
+    # The final balance must equal the balance after the last step.
+    mutation("wrong final balance", lambda t: t.update(final=0))
+    # Step 3 deposits 0: a zero amount must be rejected.
+    mutation("zero amount accepted", lambda t: t["steps"][3].update(status="ok"))
+    # A trace must contain at least one step.
+    mutation("empty trace", lambda t: t.update(steps=[]))
 
     def break_continuity(t):
-        # Cette transition reste valide isolément, mais ne suit plus la précédente.
+        # This step is still valid on its own, but no longer follows step 0.
         t["steps"][1].update(before=151, after=109)
 
-    mutation("rupture de continuité", break_continuity)
+    mutation("broken continuity between steps", break_continuity)
 
     with tempfile.TemporaryDirectory(dir=source.parent) as directory:
         for name, candidate in invalid:
@@ -42,10 +54,10 @@ def main():
             )
             if result.returncode != 1:
                 raise SystemExit(
-                    f"Rejet attendu pour {name}, code reçu {result.returncode}: "
-                    f"{result.stderr}"
+                    f"Expected CUE to reject '{name}', got exit code "
+                    f"{result.returncode}: {result.stderr}"
                 )
-            print(f"Rejet confirmé : {name}")
+            print(f"Rejection confirmed: {name}")
 
 
 if __name__ == "__main__":
