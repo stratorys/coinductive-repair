@@ -14,9 +14,9 @@ echo "==> 2/3 Behaviour of add: contracts/observations.json -> specs/behavior.cu
 cargo run --quiet > contracts/observations.json
 cue vet -c specs/behavior.cue contracts/observations.json
 
-echo "==> 3/3 Bank account trace: contracts/account.json -> specs/account.cue"
-cargo run --quiet --example account > contracts/account.json
-cue vet -c specs/account.cue contracts/account.json
-uv run --no-project scripts/check_account.py
+echo "==> 3/3 Ledger trace: contracts/ledger.json -> specs/ledger.cue"
+cargo run --quiet --example ledger > contracts/ledger.json
+cue vet -c specs/ledger.cue contracts/ledger.json
+uv run --no-project scripts/check_ledger.py
 
 echo "All checks passed: the API and observed behaviour match the CUE specs."

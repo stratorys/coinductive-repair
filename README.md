@@ -1,258 +1,151 @@
-# coinductive-repair
+# Rust → JSON → CUE
 
-Check what Rust code **exposes** and what it **actually does** against
-independent [CUE](https://cuelang.org) specifications, with JSON as the bridge
-between them.
+Runnable example of validating a Rust API and its observed behaviour.
 
-Tests usually live next to the code, in the same language, and are often
-written by the same person at the same time. This repository explores another
-approach: the expected behaviour is written as CUE specs that know nothing
-about the implementation. The Rust code is inspected or run, what it exposes
-or produces is written out as JSON, and `cue vet` checks that JSON against the
-specs. If the code drifts away from the spec, the check fails.
+## How it works end to end
 
-This is a small, runnable proof of concept, not a library.
+The `.cue` files are specifications: they describe what the code must do. The
+`.json` files are observations: they describe what the code exposes or what it
+actually produced. `cue vet` compares the two.
 
-## How it works
+`scripts/check.sh` runs these steps in order:
 
-```text
-                 inspect / run                    cue vet
-  Rust code  ─────────────────►  JSON observations  ◄──────────  CUE specs
-  src/, examples/                contracts/*.json                specs/*.cue
-```
+1. Rustdoc analyses the library and writes `target/doc/coinductive_repair.json`.
+   This JSON describes the API; it does not contain function bodies.
+2. `uv run` executes the adapter that extracts the signature of `add` into
+   `contracts/api.json`. CUE compares it with `specs/api.cue`.
+3. `cargo run` actually calls `add` with 260 input pairs and writes the results
+   to `contracts/observations.json`. CUE compares them with the equations in
+   `specs/behavior.cue`.
+4. `cargo run --example ledger` posts fifteen transfers between four accounts
+   and writes `contracts/ledger.json`. CUE checks every transition against
+   `specs/ledger.cue`: status, balances, double entries, conservation of money
+   and continuity of the trace.
+5. `uv run` executes the test that corrupts seventeen temporary copies of this
+   trace. CUE must reject every copy. The copies are then deleted.
 
-- **Specs** (`specs/*.cue`) describe what the code must do. They are written
-  independently of the implementation.
-- **Observations** (`contracts/*.json`) record what the code exposes or what it
-  actually produced when it ran.
-- **`cue vet`** compares the two and fails on any mismatch.
+A rejected transfer is an expected result, for example when the source account
+would exceed its overdraft limit. A rejection by CUE means the JSON contradicts
+the specification. The "Rejection confirmed" lines mean that the injected
+defects were detected, not that the original trace contains defects.
 
-## Quick start
+The three JSON files in `contracts/` are versioned so that observations can be
+read and compared in Git. The script regenerates them on every run. Editing them
+by hand does not fix Rust: change the code and rerun the script. The raw rustdoc
+JSON stays in `target/`, which Git ignores.
 
-Prerequisites:
+## Running
 
-- [Rust](https://rustup.rs) stable **and** nightly (nightly is needed for
-  rustdoc's JSON output)
-- [uv](https://docs.astral.sh/uv/) to run the Python helper scripts
-- [CUE](https://cuelang.org/docs/introduction/installation/) v0.17.1
+Requirements: stable Rust, nightly Rust, uv and CUE (module at version 0.17.1).
+Python scripts are only run through `uv run`.
 
 ```sh
 rustup toolchain install nightly
 bash scripts/check.sh
 ```
 
-Expected output (Cargo build lines omitted):
+The script regenerates three versioned artefacts in `contracts/`:
 
-```text
-==> 1/3 API shape: rustdoc JSON -> contracts/api.json -> specs/api.cue
-==> 2/3 Behaviour of add: contracts/observations.json -> specs/behavior.cue
-==> 3/3 Bank account trace: contracts/account.json -> specs/account.cue
-Rejection confirmed: withdrawal fee not charged
-Rejection confirmed: balance debited after a rejection
-Rejection confirmed: overflow reported as ok
-Rejection confirmed: wrong final balance
-Rejection confirmed: zero amount accepted
-Rejection confirmed: empty trace
-Rejection confirmed: broken continuity between steps
-All checks passed: the API and observed behaviour match the CUE specs.
-```
+- `api.json`: top-level public functions extracted from rustdoc;
+- `observations.json`: actual inputs and results of the Rust function `add`;
+- `ledger.json`: trace of fifteen transfers posted to a ledger.
 
-How to read it:
+The independent contracts are in `specs/`. A command fails as soon as an
+extraction, an execution or a validation fails.
 
-- Each `Rejection confirmed` line is **good news**. It means a deliberately
-  corrupted copy of the trace was caught by the spec (see
-  [mutation testing](#mutation-testing) below).
-- A rejected bank operation, such as a withdrawal without enough funds, is a
-  normal result that the spec expects. It is not a failure.
-- The script stops at the first extraction, run or validation that fails, and
-  exits with a non-zero code.
+## What is checked
 
-## The three checks
+The API contract requires `pub fn add(u32, u32) -> u32`. The behavioural
+contract requires every result to equal the sum of its inputs and to fit in a
+u32. The program observes all 256 pairs of values from 0 to 15, then four u32
+boundary cases. Inputs whose sum exceeds u32::MAX are outside the domain of this
+contract; the function panics in that case, but CUE does not check this panic.
 
-### 1. API shape
+To observe a failure, change `add` to return a wrong value and rerun the script,
+or change its signature to break the API contract. Required fields and the
+non-empty list prevent a validation without data.
 
-```text
-cargo rustdoc (JSON) → scripts/normalize_rustdoc.py → contracts/api.json → specs/api.cue
-```
+## Limits and extension
 
-Rustdoc describes the crate's public API as JSON. A small Python adapter keeps
-only the top-level public functions and their signatures. The spec then
-requires `add` to keep exactly this shape:
+Rustdoc JSON describes the API, not the AST of function bodies. The Python
+adapter is deliberately limited to top-level public functions that are not
+generic, synchronous, safe and use primitive types. It ignores methods and
+submodules, and refuses extracted function signatures it cannot translate. Add
+explicit support for them to widen the analysis.
 
-```cue
-functions!: {
-	add!: {
-		visibility!: "public"
-		inputs!: ["u32", "u32"]
-		output!: "u32"
-	}
-}
-```
+The rustdoc JSON format is unstable: pin a nightly version in CI and adapt the
+extractor when upgrading. Expressions and branches need another extractor (for
+example one based on `syn`).
 
-Fields ending in `!` are required, so a missing function fails the check.
+CUE validates the observations it is given. This does not prove correctness for
+every input. Extend the generator with business cases, random inputs or
+transition traces to check more properties. Specs must express intent
+independently of the implementation.
 
-### 2. Behaviour of a pure function
+## Stateful example: double-entry ledger
 
-```text
-src/main.rs → contracts/observations.json → specs/behavior.cue
-```
-
-`src/main.rs` really calls `add` on 260 input pairs: every pair from 0 to 15
-(256 runs), plus 4 edge cases next to `u32::MAX`. Each output must equal the
-sum of its inputs and fit in a `u32`:
-
-```cue
-#Run: {
-	input!: {
-		a!: #U32
-		b!: #U32
-	}
-	// Only covers inputs whose sum fits in a u32.
-	output!: #U32 & (input.a + input.b)
-}
-
-// At least one observation is required, so an empty file cannot pass.
-runs!: [#Run, ...#Run]
-```
-
-Inputs whose sum exceeds `u32::MAX` are outside this contract. `add` panics on
-them, and that panic is not checked by CUE.
-
-### 3. Behaviour with state: a bank account
-
-```text
-examples/account.rs → contracts/account.json → specs/account.cue → scripts/check_account.py
-```
-
-The account in `src/account.rs` follows these rules:
-
-- It starts with a balance of 100.
-- A deposit adds the amount to the balance.
-- An accepted withdrawal removes the amount **plus a fixed fee of 2**.
-- A zero amount, a deposit that would go past `u32::MAX`, or a withdrawal
-  without enough funds to cover amount + fee is **rejected**. The balance stays
-  the same and no fee is charged.
-
-`examples/account.rs` runs 11 operations in a row and records each one
-(operation, amount, balance before and after, status). For example:
-
-| Operation | Before | Amount | After | Status |
-| --- | ---: | ---: | ---: | --- |
-| deposit | 100 | 50 | 150 | `ok` |
-| withdraw | 150 | 40 | 108 | `ok` |
-| withdraw | 108 | 200 | 108 | `insufficient_funds` |
-| deposit | 108 | 0 | 108 | `zero_amount` |
-| deposit | 108 | 4294967295 | 108 | `overflow` |
-
-The trace also includes a withdrawal of `u32::MAX`, which checks that
-computing amount + fee does not itself overflow.
-
-The spec checks three things:
-
-- **Each step:** the status and resulting balance follow the rules above. For
-  example, for withdrawals:
-
-  ```cue
-  if operation == "withdraw" {
-  	// The fee is only charged when the withdrawal is accepted.
-  	if amount+#WithdrawalFee <= before {
-  		status: "ok"
-  		after:  before - amount - #WithdrawalFee
-  	}
-  	if amount+#WithdrawalFee > before {
-  		status: "insufficient_funds"
-  		after:  before
-  	}
-  }
-  ```
-
-- **Continuity:** each step starts from the balance left by the previous one,
-  and the first step starts from the initial balance.
-- **Final balance:** it equals the balance after the last step.
-
-#### Mutation testing
-
-A spec that accepts everything would also "pass". To show that this one
-actually catches errors, `scripts/check_account.py` makes 7 corrupted copies of
-the trace, each breaking exactly one rule, and checks that CUE rejects every
-one of them:
-
-| Mutation | Rule it breaks |
-| --- | --- |
-| withdrawal fee not charged | an accepted withdrawal costs amount + fee |
-| balance debited after a rejection | a rejected operation leaves the balance unchanged |
-| overflow reported as ok | a deposit past `u32::MAX` must be reported as `overflow` |
-| wrong final balance | the final balance equals the last step's balance |
-| zero amount accepted | a zero amount must be rejected |
-| empty trace | a trace has at least one step |
-| broken continuity between steps | each step starts from the previous balance (the step is valid on its own) |
-
-To run only this example:
+The implementation is in `src/ledger.rs`, the scenario in `examples/ledger.rs`
+and the independent contract in `specs/ledger.cue`.
 
 ```sh
-cargo run --quiet --example account > contracts/account.json
-cue vet -c specs/account.cue contracts/account.json
-uv run --no-project scripts/check_account.py
+cargo run --quiet --example ledger > contracts/ledger.json
+cue vet -c specs/ledger.cue contracts/ledger.json
+uv run --no-project scripts/check_ledger.py
 ```
 
-## Repository layout
+The ledger holds the accounts of a small company, in cents. `operating` opens at
+120,000.00 with an overdraft limit of 20,000.00; `payroll`, `suppliers` and
+`tax_reserve` open at zero without overdraft. A transfer moves money from one
+account to another and is either applied entirely or rejected without effect.
+When several rules apply, the first one in this order is reported:
 
-| Path | Role |
+| Status | Rule |
 | --- | --- |
-| `src/lib.rs` | The `add` function under test |
-| `src/account.rs` | The bank account under test |
-| `src/main.rs` | Calls `add` on many inputs and prints the results as JSON |
-| `examples/account.rs` | Runs a sequence of account operations and prints the trace as JSON |
-| `specs/*.cue` | The specifications, written independently of the code |
-| `contracts/*.json` | Generated observations, checked against the specs |
-| `scripts/check.sh` | Runs every step, in order |
-| `scripts/normalize_rustdoc.py` | Reduces rustdoc JSON to the top-level public function signatures |
-| `scripts/check_account.py` | Mutation test: checks that corrupted traces are rejected |
-| `cue.mod/module.cue` | CUE module definition |
+| `non_positive_amount` | The amount is zero or negative. |
+| `above_transfer_limit` | The amount exceeds 100,000.00. |
+| `unknown_account` | The source or destination is not declared. |
+| `same_account` | The source and destination are the same account. |
+| `duplicate` | A transfer with the same id was already accepted. |
+| `overdraft_limit` | The source would go below its overdraft limit. |
+| `overflow` | The destination balance would exceed `i64::MAX`. |
+| `ok` | The transfer is applied. |
 
-### Why the generated JSON is committed
+The transfer id is an idempotency key: retrying an accepted transfer is
+rejected as `duplicate`, while a rejected transfer does not consume its id and
+can be retried. Excerpt of the trace (amounts in cents):
 
-The files in `contracts/` are regenerated on every run of `scripts/check.sh`.
-They are committed so that changes in observed behaviour show up in Git
-diffs and code review. Editing them by hand does not fix anything: change the
-Rust code and run the script again. The raw rustdoc JSON stays in `target/`,
-which Git ignores.
+| Transfer | From → To | Amount | Status | Operating after |
+| --- | --- | ---: | --- | ---: |
+| PAY-2026-10 | operating → payroll | 4500000 | ok | 7500000 |
+| PAY-2026-10 | operating → payroll | 4500000 | duplicate | 7500000 |
+| SUP-0043 | operating → suppliers | 10000001 | above_transfer_limit | 2500000 |
+| SUP-0043 | operating → suppliers | 4000000 | ok | -1500000 |
+| SUP-0044 | operating → suppliers | 600000 | overdraft_limit | -1500000 |
+| SUP-0044 | operating → suppliers | 500000 | ok | -2000000 |
 
-## Try breaking it
+For every step, CUE checks:
 
-The quickest way to see what the checks are worth is to break the code on
-purpose. Make one of these changes and run `bash scripts/check.sh`:
+- the status, recomputed from the rules above and the earlier steps;
+- for an accepted transfer: the source is debited and the destination credited
+  by the amount, no other account changes, the source stays within its overdraft
+  limit, and exactly one debit and one credit entry of that amount are recorded;
+- for a rejected transfer: no balance changes and no entry is recorded;
+- conservation: the sum of all balances equals the sum of opening balances;
+- continuity: each step starts from the balances left by the previous one, and
+  the closing balances equal those after the last step;
+- every balance snapshot names exactly the declared accounts.
 
-| Change | Check that fails |
-| --- | --- |
-| In `src/lib.rs`, make `add` return `a.wrapping_add(b).wrapping_add(1)` | 2, behaviour of `add` |
-| In `src/lib.rs`, change `b: u32` to `b: u64` | 1, API shape |
-| In `src/account.rs`, set `WITHDRAWAL_FEE` to `3` | 3, bank account trace |
-| In `src/account.rs`, remove the `amount == 0` check in `apply` | 3, bank account trace |
+`scripts/check_ledger.py`, run through uv, injects seventeen defects into copies
+of the trace and checks that CUE rejects each one: a credit not posted or posted
+to the wrong account, a third account changed, unbalanced entries, a duplicate
+paid twice, an exceeded overdraft, a rejected transfer that moves money, a
+broken continuity, and so on. Defects are propagated through the rest of the
+trace, so each copy stays continuous unless continuity is what is being broken.
 
-Afterwards, restore the code and the regenerated JSON with
-`git restore src contracts`.
+Constructor errors (duplicate account, negative overdraft limit, opening below
+the overdraft limit) are covered by Rust unit tests, since the trace only
+contains valid ledgers.
 
-## Limitations
-
-- **Rustdoc JSON is unstable.** Its format changes between nightly releases.
-  Pin a nightly version in CI and update `normalize_rustdoc.py` when you
-  upgrade.
-- **The API extractor is deliberately small.** It only handles top-level public
-  functions that are non-generic, synchronous, safe, use the Rust ABI and take
-  primitive types. It ignores methods and submodules, and fails loudly on any
-  other signature rather than guessing. As a result, the bank account's API is
-  not checked structurally; only its behaviour is.
-- **Signatures, not bodies.** Rustdoc JSON does not describe function bodies.
-  Checking expressions or branches would need another extractor, for example
-  one based on [`syn`](https://crates.io/crates/syn).
-- **Observations are not proofs.** CUE validates the observations it is given.
-  Passing does not prove the code is correct for every input. To cover more
-  ground, add business scenarios, random inputs or longer traces.
-- **Keep specs independent.** A spec derived from the implementation only
-  checks that the code does what it does. Write specs from the intended
-  behaviour.
-
-## License
-
-Licensed under the [Mozilla Public License 2.0](LICENSE).
+The current rustdoc extraction remains limited to the top-level `add` API: the
+types and methods of the ledger module are not normalised. This example extends
+behavioural checking without extending the structural API contract.

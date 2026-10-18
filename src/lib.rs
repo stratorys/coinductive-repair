@@ -1,6 +1,6 @@
 //! Small API used to demonstrate Rust → JSON → CUE validation.
 
-pub mod account;
+pub mod ledger;
 
 /// Adds two integers whose sum fits in a `u32`.
 ///
